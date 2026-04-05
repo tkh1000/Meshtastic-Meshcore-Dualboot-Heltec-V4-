@@ -1,0 +1,9 @@
+# Heltec V4 Dual-Boot Partition Table — 16MB Flash
+# Name,     Type, SubType,  Offset,    Size,    Flags
+nvs,        data, nvs,      0x9000,    0x5000,
+otadata,    data, ota,      0xe000,    0x2000,
+factory,    app,  factory,  0x10000,   0x100000,
+ota_0,      app,  ota_0,    0x110000,  0x570000,
+ota_1,      app,  ota_1,    0x680000,  0x570000,
+spiffs,     data, spiffs,   0xBF0000,  0x400000,
+coredump,   data, coredump, 0xFF0000,  0x10000,
