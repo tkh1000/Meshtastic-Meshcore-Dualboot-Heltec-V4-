@@ -8,6 +8,9 @@ This is version 3.0
 - Fixed Bluetooth bonding issue when switching (maintained encryption), now meshcore advertises seperate mac address so you need only to setup each system once.
 - Fixed seperate partition for each system data without corruption
 
+Future (working) 3.5
+- adding another partition for Meshcore Repeater
+
 If you found this helpful, please consider buying me a coffee :) https://buymeacoffee.com/tkh1000
 
 ![Selector Menu](images/img1.jpg) 
