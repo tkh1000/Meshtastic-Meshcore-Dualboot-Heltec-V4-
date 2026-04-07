@@ -2,11 +2,12 @@
 """
 Heltec V4 Dual-Boot Flash Script
 Flashes:
-  1. Selector app   → factory partition (0x10000)
-  2. MeshCore bin   → ota_0 partition   (0x110000)
-  3. Meshtastic bin → ota_1 partition   (0x680000)
-  4. Partition table → 0x8000
-  5. Bootloader    → 0x0000
+  1. Bootloader      → 0x0000
+  2. Partition table → 0x8000
+  3. OTA data        → 0x1c000
+  4. Selector app    → factory partition (0x20000)
+  5. MeshCore bin    → ota_0 partition   (0x220000)
+  6. Meshtastic bin  → ota_1 partition   (0x680000)
 
 Usage:
     python flash_all.py <PORT>
@@ -22,16 +23,18 @@ import os
 OFFSETS = {
     "bootloader":   "0x0000",
     "partitions":   "0x8000",
-    "selector":     "0x10000",   # factory
-    "meshcore":     "0x110000",  # ota_0
+    "otadata":      "0x1c000",
+    "selector":     "0x20000",   # factory
+    "meshcore":     "0x220000",  # ota_0
     "meshtastic":   "0x680000",  # ota_1
 }
 
 # ── Expected binary locations ──
 BINS = {
-    "bootloader":  "selector/build/bootloader/bootloader.bin",
-    "partitions":  "partitions_dualboot.bin",       # generated below
-    "selector":    "selector/build/heltec_v4_selector.bin",
+    "bootloader":  "prebuilt/bootloader.bin",
+    "partitions":  "prebuilt/partition-table.bin",
+    "otadata":     "prebuilt/ota_data_initial.bin",
+    "selector":    "prebuilt/selector.bin",
     "meshcore":    "meshcore/firmware.bin",          # place MeshCore bin here
     "meshtastic":  "meshtastic/firmware.bin",        # place Meshtastic bin here
 }
@@ -77,35 +80,8 @@ def main():
     print(f"   Port: {port}")
     print(f"   Chip: {CHIP}\n")
 
-    # Step 1: Build selector
-    print("Step 1: Building selector firmware...")
-    os.chdir("selector")
-    run(["idf.py", "build"], "Build selector app")
-    os.chdir("..")
-
-    # Step 2: Generate partitions.bin from CSV
-    print("\nStep 2: Generating partition table binary...")
-    run([
-        "python", "-m", "esptool",
-        "partition_table",
-        "--flash-size", FLASH_SIZE,
-        "partitions_dualboot.csv",
-        "partitions_dualboot.bin"
-    ], "Generate partitions.bin")
-
-    # Fallback: use gen_esp32part.py directly if above fails
-    if not os.path.exists("partitions_dualboot.bin"):
-        idf_path = os.environ.get("IDF_PATH", "")
-        gen_script = os.path.join(idf_path, "components", "partition_table", "gen_esp32part.py")
-        run([
-            "python", gen_script,
-            "--flash-size", FLASH_SIZE,
-            "partitions_dualboot.csv",
-            "partitions_dualboot.bin"
-        ], "Generate partitions.bin (fallback)")
-
-    # Step 3: Check all binaries exist
-    print("\nStep 3: Checking binaries...")
+    # Step 1: Check all binaries exist
+    print("\nStep 1: Checking binaries...")
     ok = True
     for label, path in BINS.items():
         ok = check_file(path, label) and ok
@@ -117,8 +93,8 @@ def main():
         print("   - Re-run this script after placing the binaries.")
         sys.exit(1)
 
-    # Step 4: Flash everything
-    print("\nStep 4: Flashing all partitions...")
+    # Step 2: Flash everything
+    print("\nStep 2: Flashing all partitions...")
     print("   ⚠️  Put device in bootloader mode:")
     print("   Hold PRG button → connect USB → release PRG\n")
     input("   Press ENTER when ready...")
@@ -134,6 +110,7 @@ def main():
         "--flash_size", FLASH_SIZE,
         OFFSETS["bootloader"],  BINS["bootloader"],
         OFFSETS["partitions"],  BINS["partitions"],
+        OFFSETS["otadata"],     BINS["otadata"],
         OFFSETS["selector"],    BINS["selector"],
         OFFSETS["meshcore"],    BINS["meshcore"],
         OFFSETS["meshtastic"],  BINS["meshtastic"],

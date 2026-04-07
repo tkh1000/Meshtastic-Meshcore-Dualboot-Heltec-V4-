@@ -1,6 +1,6 @@
 # Heltec V4 Dual-Boot: Meshtastic + MeshCore
 
-A dual-boot setup for the **Heltec WiFi LoRa 32 V4** (ESP32-S3, 16 MB flash) that lets you switch between [Meshtastic](https://meshtastic.org) and [MeshCore](https://meshcore.co.uk) from a boot-time selector menu on the OLED.
+A dual-boot setup for the **Heltec WiFi LoRa 32 V4** (ESP32-S3, 16 MB flash) that lets you switch between [Meshtastic](https://meshtastic.org) and [MeshCore](https://github.com/meshcore-dev/MeshCore) from a boot-time selector menu on the OLED. **Settings for both firmwares persist across switches.**
 
 ```
 ┌─────────────────────────────────┐
@@ -19,20 +19,31 @@ A dual-boot setup for the **Heltec WiFi LoRa 32 V4** (ESP32-S3, 16 MB flash) tha
 
 | Flash region | Partition | Contents |
 |---|---|---|
-| `0x0000` | bootloader | Custom bootloader (factory-reset on GPIO0 hold) |
+| `0x0000` | bootloader | Custom bootloader (extended GPIO0 window + factory-reset) |
 | `0x8000` | partition table | `partitions_dualboot.csv` |
-| `0xe000` | otadata | OTA boot selection state |
-| `0x10000` | factory (1 MB) | **Selector app** — always runs on first/clean boot |
-| `0x110000` | ota_0 (5.4 MB) | **MeshCore** firmware |
+| `0x9000` | nvs (64 KB) | Shared NVS — Arduino/IDF runtime state |
+| `0x19000` | nvs_sel (12 KB) | Isolated NVS — selector last-boot state |
+| `0x1C000` | otadata | OTA boot selection state |
+| `0x20000` | factory (2 MB) | **Selector app** — always runs on first/clean boot |
+| `0x220000` | ota_0 (4.4 MB) | **MeshCore** firmware |
 | `0x680000` | ota_1 (5.4 MB) | **Meshtastic** firmware |
-| `0xBF0000` | spiffs (4 MB) | Meshtastic file storage |
+| `0xBF0000` | spiffs (2 MB) | Meshtastic LittleFS filesystem |
+| `0xDF0000` | mc_spiffs (2 MB) | MeshCore SPIFFS filesystem |
 | `0xFF0000` | coredump (64 KB) | Crash dump |
+
+### Why settings persist
+
+MeshCore and Meshtastic use different filesystem formats on ESP32:
+- Meshtastic uses **LittleFS** (mounts the `spiffs` partition)
+- MeshCore uses **SPIFFS** (mounts the `mc_spiffs` partition)
+
+Without isolation, each firmware would see the other's incompatible filesystem format on boot, format it, and wipe all settings. By giving each firmware its own dedicated partition label, they never touch each other's storage.
 
 **Boot flow:**
 1. Power on → bootloader checks GPIO0 → runs selector (factory partition)
 2. Selector shows menu; PRG cycles choice; auto-boots after 5 s
 3. Selected firmware boots; selection saved to NVS for next auto-boot
-4. To return to selector from any firmware: tap **RST**, then immediately hold **PRG** for 2 s
+4. To return to selector from any firmware: tap **RST**, then press and hold **PRG** for 2 s
 
 ---
 
@@ -42,11 +53,10 @@ A dual-boot setup for the **Heltec WiFi LoRa 32 V4** (ESP32-S3, 16 MB flash) tha
 - Heltec WiFi LoRa 32 V4
 - USB-C cable
 - [esptool](https://github.com/espressif/esptool): `pip install esptool`
-- [MeshCore firmware for Heltec V4](https://flasher.meshcore.co.uk) — download and save as `meshcore/firmware.bin`
 
-The Meshtastic firmware (`meshtastic/firmware.bin`) is included in this release, built from Meshtastic `2.7.21`.
+Both MeshCore (Companion Radio BLE) and Meshtastic (2.7.21) firmware are included.
 
-### Flash
+### Flash via esptool
 
 **Put device in bootloader mode:** hold **PRG** → plug USB → release **PRG**
 
@@ -55,24 +65,37 @@ esptool.py --chip esp32s3 --port COM<N> --baud 921600 \
   write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB \
   0x0000    prebuilt/bootloader.bin         \
   0x8000    prebuilt/partition-table.bin    \
-  0xe000    prebuilt/ota_data_initial.bin   \
-  0x10000   prebuilt/selector.bin           \
-  0x110000  meshcore/firmware.bin           \
+  0x1c000   prebuilt/ota_data_initial.bin   \
+  0x20000   prebuilt/selector.bin           \
+  0x220000  meshcore/firmware.bin           \
   0x680000  meshtastic/firmware.bin
 ```
 
-Or use the included script (requires `meshcore/firmware.bin` placed first):
+Or use the included script:
 
 ```bash
 python flash_all.py COM<N>
 ```
 
-> **Note:** `flash_all.py` generates `partitions_dualboot.bin` via `gen_esp32part.py` from ESP-IDF.
-> If you don't have ESP-IDF, generate it manually:
-> ```bash
-> python -m esptool gen_esp32part --flash-size 16MB partitions_dualboot.csv partitions_dualboot.bin
-> ```
-> Then re-run `flash_all.py`.
+### Flash via JTAG (no COM port needed)
+
+The Heltec V4's built-in USB exposes a JTAG interface. If you can't get a serial COM port, use OpenOCD:
+
+```bash
+OPENOCD="<esp-idf-tools>/openocd-esp32/.../bin/openocd"
+SCRIPTS="<esp-idf-tools>/openocd-esp32/.../share/openocd/scripts"
+
+$OPENOCD -s $SCRIPTS -f board/esp32s3-builtin.cfg -c "
+  init; halt
+  flash write_image erase prebuilt/bootloader.bin        0x0
+  flash write_image erase prebuilt/partition-table.bin   0x8000
+  flash write_image erase prebuilt/ota_data_initial.bin  0x1c000
+  flash write_image erase prebuilt/selector.bin          0x20000
+  flash write_image erase meshcore/firmware.bin          0x220000
+  flash write_image erase meshtastic/firmware.bin        0x680000
+  reset run; exit
+"
+```
 
 ---
 
@@ -84,16 +107,14 @@ python flash_all.py COM<N>
 | Wait 5 s | Auto-boot last-used firmware |
 | Hold **PRG** at power-on | Force selector (disable auto-boot) |
 
-### Getting back to the selector
-
-From any running firmware:
+### Getting back to the selector from running firmware
 
 1. Tap **RST** (release it fully)
-2. Immediately press and hold **PRG** (within ~300 ms of RST releasing)
+2. Immediately press and hold **PRG** (within ~1.3 s of RST releasing)
 3. Hold **PRG** for **2 seconds**
 4. Selector appears
 
-> **Why this timing?** GPIO0 (PRG) is an ESP32-S3 strapping pin. Holding it LOW *while RST releases* triggers ROM download mode instead of our bootloader. The PRG press must happen *after* RST releases.
+> **Why this timing?** GPIO0 (PRG) is an ESP32-S3 strapping pin. Holding it LOW *while RST releases* triggers ROM download mode instead of our bootloader. The PRG press must happen *after* RST releases. The custom bootloader extends the detection window to ~1.3 s.
 
 ---
 
@@ -102,7 +123,6 @@ From any running firmware:
 ### Selector (ESP-IDF v5.x)
 
 ```bash
-# Requires ESP-IDF v5.x installed and activated
 cd selector
 idf.py set-target esp32s3
 idf.py build
@@ -115,46 +135,111 @@ idf.py build
 ### Meshtastic (PlatformIO)
 
 ```bash
-# Requires PlatformIO CLI
-cd <meshtastic-firmware-repo>
+git clone https://github.com/meshtastic/firmware meshtastic-firmware
+cd meshtastic-firmware
 pio run -e heltec-v4
 # Output: .pio/build/heltec-v4/firmware-heltec-v4-*.bin
 ```
 
-Copy the output to `meshtastic/firmware.bin`.
+### MeshCore (PlatformIO)
 
-### MeshCore
-
-Download from [flasher.meshcore.co.uk](https://flasher.meshcore.co.uk), select **Heltec WiFi LoRa 32 V4**, download the `.bin` file and save as `meshcore/firmware.bin`.
+```bash
+git clone https://github.com/meshcore-dev/MeshCore meshcore-firmware
+cd meshcore-firmware
+# Apply partition table:
+# In variants/heltec_v4/platformio.ini, add under [Heltec_lora32_v4]:
+#   board_build.partitions = <path>/partitions_dualboot.csv
+#   board_upload.maximum_size = 5767168
+# In examples/companion_radio/main.cpp, change:
+#   SPIFFS.begin(true)  →  SPIFFS.begin(true, "/spiffs", 10, "mc_spiffs")
+pio run -e heltec_v4_companion_radio_ble
+# Output: .pio/build/heltec_v4_companion_radio_ble/firmware.bin
+```
 
 ---
 
-## Flashing via JTAG (no COM port needed)
+## Bluetooth Setup
 
-The Heltec V4's built-in USB exposes a JTAG interface (no driver needed beyond what ESP-IDF installs). If you can't get a serial COM port, use OpenOCD:
+Each firmware advertises as a **separate BLE device** with its own unique MAC address:
+
+| Firmware | BLE name | Address |
+|---|---|---|
+| Meshtastic | `Meshtastic_XXYY` | Real hardware MAC |
+| MeshCore | `MeshCore_XXYY` | Derived random static MAC |
+
+This means your phone stores two independent BLE bonds — one per firmware. Once paired to each, **switching firmware never requires re-pairing or "Forget Device"** — the phone automatically reconnects to the right bond.
+
+### First-time BLE setup (one-time only)
+
+**MeshCore:**
+1. Boot into MeshCore via the selector
+2. A PIN code is shown on the OLED display
+3. Open the MeshCore companion app → scan → connect to `MeshCore_XXYY` → enter the PIN
+4. Bond is stored on your phone permanently
+
+**Meshtastic:**
+1. Boot into Meshtastic via the selector
+2. Open the Meshtastic app → Bluetooth → connect to `Meshtastic_XXYY`
+3. Set a fixed PIN in Meshtastic app settings (optional but recommended)
+
+After both are paired once, switching between firmwares is seamless — just use the selector and your phone reconnects automatically.
+
+---
+
+## Updating Firmware
+
+You **do not** need to reflash the selector, bootloader, or partition table when updating firmware versions.
+
+### Update Meshtastic
+
+Download the latest `firmware-heltec-v4-X.X.X.bin` from the [Meshtastic releases](https://github.com/meshtastic/firmware/releases) page and flash only the Meshtastic slot:
 
 ```bash
-OPENOCD="<esp-idf-tools>/openocd-esp32/.../bin/openocd"
-SCRIPTS="<esp-idf-tools>/openocd-esp32/.../share/openocd/scripts"
+esptool.py --chip esp32s3 --port COM<N> --baud 921600 \
+  write_flash 0x680000 firmware-heltec-v4-X.X.X.bin
+```
 
-$OPENOCD -s $SCRIPTS -f board/esp32s3-builtin.cfg -c "
-  init; halt
-  flash write_image erase prebuilt/bootloader.bin        0x0
-  flash write_image erase prebuilt/partition-table.bin   0x8000
-  flash write_image erase prebuilt/ota_data_initial.bin  0xe000
-  flash write_image erase prebuilt/selector.bin          0x10000
-  flash write_image erase meshcore/firmware.bin          0x110000
-  flash write_image erase meshtastic/firmware.bin        0x680000
-  reset run; exit
-"
+### Update MeshCore
+
+The MeshCore binary includes custom BLE patches for this dual-boot setup (random static address, `MeshCore_` name prefix). You must rebuild from source:
+
+```bash
+cd meshcore-firmware
+git pull
+pio run -e heltec_v4_companion_radio_ble
+```
+
+Then flash the new binary:
+
+```bash
+esptool.py --chip esp32s3 --port COM<N> --baud 921600 \
+  write_flash 0x220000 .pio/build/heltec_v4_companion_radio_ble/firmware.bin
+```
+
+The custom patches to re-apply after a `git pull` are in two files:
+
+**`src/helpers/esp32/SerialBLEInterface.cpp`** — BLE random static address (gives MeshCore a separate BLE MAC from Meshtastic so phone stores independent bonds):
+- Derive `_rand_addr` from efuse MAC with top 2 bits set to `0xC0`
+- Call `pServer->getAdvertising()->setDeviceAddress(_rand_addr, BLE_ADDR_TYPE_RANDOM)` before each `start()`
+
+**`variants/heltec_v4/platformio.ini`** — partition table path, size override, BLE name:
+```ini
+board_build.partitions = <path>/partitions_dualboot.csv
+board_upload.maximum_size = 5767168
+-D BLE_PIN_CODE=123456
+'-D BLE_NAME_PREFIX="MeshCore_"'
+```
+
+**`examples/companion_radio/main.cpp`** — SPIFFS partition isolation:
+```cpp
+SPIFFS.begin(true, "/spiffs", 10, "mc_spiffs");
 ```
 
 ---
 
 ## Known Limitations
 
-- **Bluetooth re-pairing on switch** — Both firmwares share the `nvs` partition but store BT bonding keys under different namespaces. Switching firmware requires re-pairing on the phone. Workaround: use WiFi connection (Meshtastic supports it on ESP32-S3).
-- **MeshCore first boot** — MeshCore shows a "loading" screen on first boot while it initializes. This is normal; it is waiting for BLE connection from the MeshCore phone app.
+- **MeshCore first boot** — MeshCore shows a loading screen on first boot while initialising SPIFFS. Normal behaviour — connect via the MeshCore BLE companion app.
 
 ---
 
@@ -163,24 +248,28 @@ $OPENOCD -s $SCRIPTS -f board/esp32s3-builtin.cfg -c "
 ```
 heltec-v4-dualboot/
 ├── README.md
-├── partitions_dualboot.csv       # 16 MB partition table
-├── flash_all.py                  # convenience flash script (esptool)
-├── prebuilt/                     # ready-to-flash binaries
-│   ├── bootloader.bin            # flash @ 0x0000
-│   ├── partition-table.bin       # flash @ 0x8000
-│   ├── ota_data_initial.bin      # flash @ 0xe000
-│   └── selector.bin              # flash @ 0x10000
-├── selector/                     # selector app source (ESP-IDF)
+├── partitions_dualboot.csv         # 16 MB partition table
+├── flash_all.py                    # convenience flash script
+├── prebuilt/                       # ready-to-flash binaries
+│   ├── bootloader.bin              # flash @ 0x0000
+│   ├── partition-table.bin         # flash @ 0x8000
+│   ├── ota_data_initial.bin        # flash @ 0x1c000
+│   └── selector.bin                # flash @ 0x20000
+├── selector/                       # selector app source (ESP-IDF)
 │   ├── CMakeLists.txt
 │   ├── sdkconfig.defaults
 │   ├── partitions_dualboot.csv
+│   ├── bootloader_components/
+│   │   └── main/
+│   │       ├── CMakeLists.txt
+│   │       └── bootloader_start.c  # extended GPIO0 window
 │   └── main/
 │       ├── CMakeLists.txt
 │       └── selector_main.c
-├── meshcore/                     # place MeshCore firmware.bin here
-│   └── .gitkeep
-└── meshtastic/                   # place Meshtastic firmware.bin here
-    └── firmware.bin              # included: Meshtastic 2.7.21 for Heltec V4
+├── meshcore/
+│   └── firmware.bin                # MeshCore Companion Radio BLE @ 0x220000
+└── meshtastic/
+    └── firmware.bin                # Meshtastic 2.7.21 @ 0x680000
 ```
 
 ---

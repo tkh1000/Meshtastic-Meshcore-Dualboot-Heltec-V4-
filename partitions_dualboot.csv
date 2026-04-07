@@ -1,9 +1,16 @@
 # Heltec V4 Dual-Boot Partition Table — 16MB Flash
-# Name,     Type, SubType,  Offset,    Size,    Flags
-nvs,        data, nvs,      0x9000,    0x5000,
-otadata,    data, ota,      0xe000,    0x2000,
-factory,    app,  factory,  0x10000,   0x100000,
-ota_0,      app,  ota_0,    0x110000,  0x570000,
-ota_1,      app,  ota_1,    0x680000,  0x570000,
-spiffs,     data, spiffs,   0xBF0000,  0x400000,
-coredump,   data, coredump, 0xFF0000,  0x10000,
+# factory (2MB):   Selector app (228KB) — oversized so MeshCore size check passes
+# ota_0 (4.4MB):   MeshCore firmware (1.28MB)
+# ota_1 (5.4MB):   Meshtastic firmware (2.1MB)
+# spiffs (2MB):    Meshtastic LittleFS filesystem
+# mc_spiffs (2MB): MeshCore SPIFFS filesystem — separate label prevents format conflict
+# Name,      Type, SubType,  Offset,    Size
+nvs,         data, nvs,      0x9000,    0x10000,
+nvs_sel,     data, nvs,      0x19000,   0x3000,
+otadata,     data, ota,      0x1C000,   0x2000,
+factory,     app,  factory,  0x20000,   0x200000,
+ota_0,       app,  ota_0,    0x220000,  0x460000,
+ota_1,       app,  ota_1,    0x680000,  0x570000,
+spiffs,      data, spiffs,   0xBF0000,  0x200000,
+mc_spiffs,   data, spiffs,   0xDF0000,  0x200000,
+coredump,    data, coredump, 0xFF0000,  0x10000,
