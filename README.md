@@ -10,7 +10,7 @@ This is version 3.0
 
 If you found this helpful, please consider buying me a coffee :) https://buymeacoffee.com/tkh1000
 
-
+![Selector Menu](images/img1.jpg) 
 ```
 ┌─────────────────────────────────┐
 │      Dual-Boot Selector         │
